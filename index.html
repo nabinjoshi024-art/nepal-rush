@@ -1,0 +1,342 @@
+
+<!DOCTYPE html>
+<html lang="ne">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>NEPAL RUSH</title>
+<style>
+*{box-sizing:border-box}
+body{margin:0;background:#101827;color:white;font-family:Arial,sans-serif;text-align:center}
+h1{color:#ffd43b;margin:12px 0 4px;font-size:30px}
+#sub{color:#b8c8dc;margin:4px}
+#game{width:96%;max-width:700px;height:auto;border:3px solid #ffd43b;border-radius:12px;background:#8ed6ff;touch-action:none}
+.panel{max-width:700px;margin:10px auto;padding:10px;background:#1e293b;border-radius:12px}
+button{border:0;border-radius:10px;padding:12px 18px;margin:5px;background:#ffd43b;color:#172033;font-size:16px;font-weight:bold}
+button:active{transform:scale(.96)}
+#controls button{width:42%;font-size:20px}
+#status{display:flex;justify-content:space-around;flex-wrap:wrap;gap:8px;font-weight:bold}
+#missions{text-align:left;line-height:1.8}
+.small{font-size:13px;color:#bdc9d8}
+</style>
+</head>
+<body>
+<h1>🇳🇵 NEPAL RUSH</h1>
+<div id="sub">Run • Jump • Collect • Survive</div>
+
+<canvas id="game" width="700" height="400"></canvas>
+
+<div class="panel" id="status">
+<span>🏆 Score: <b id="score">0</b></span>
+<span>🪙 Coins: <b id="coins">0</b></span>
+<span>⭐ Rewards: <b id="trophies">0</b></span>
+</div>
+
+<div class="panel">
+<div id="menu">
+<h2>Welcome to Nepal Rush!</h2>
+<p>नेपालका सुन्दर ठाउँहरूमा दौड सुरु गरौँ।</p>
+<button onclick="startGame()">▶ PLAY GAME</button>
+</div>
+<div id="over" hidden>
+<h2>💥 GAME OVER</h2>
+<p id="final"></p>
+<button onclick="startGame()">🔁 PLAY AGAIN</button>
+<button onclick="showMenu()">🏠 MENU</button>
+</div>
+<div id="pauseText" hidden>
+<h2>⏸ PAUSED</h2>
+<button onclick="resumeGame()">▶ RESUME</button>
+</div>
+<button onclick="pauseGame()">⏸ PAUSE</button>
+<button onclick="toggleSound()" id="soundBtn">🔊 SOUND ON</button>
+</div>
+
+<div class="panel" id="controls">
+<button onpointerdown="jump()">⬆ JUMP</button>
+<button onpointerdown="slide()">⬇ SLIDE</button>
+<p class="small">मोबाइलमा माथि swipe = Jump, तल swipe = Slide</p>
+</div>
+
+<div class="panel" id="missions">
+<h3>🎯 MISSIONS & REWARDS</h3>
+<div id="missionList"></div>
+<p>🪙 जम्मा Coins: <b id="totalCoins">0</b></p>
+<p>🏆 Best Score: <b id="best">0</b></p>
+</div>
+
+<script>
+const canvas=document.getElementById("game");
+const ctx=canvas.getContext("2d");
+
+const get=(k,d)=>{try{return JSON.parse(localStorage.getItem(k))??d}catch(e){return d}};
+let best=get("nr_best",0);
+let totalCoins=get("nr_totalCoins",0);
+let trophies=get("nr_trophies",0);
+let done=get("nr_done",{});
+let highestWorld=get("nr_world",0);
+
+let mode="menu",score=0,coins=0,frame=0;
+let sound=true,objects=[],coinObjects=[];
+let speed=5,ground=325;
+let player={x:90,y:270,vy:0,slide:0};
+let audio=null;
+
+function save(){
+ localStorage.setItem("nr_best",best);
+ localStorage.setItem("nr_totalCoins",totalCoins);
+ localStorage.setItem("nr_trophies",trophies);
+ localStorage.setItem("nr_done",JSON.stringify(done));
+ localStorage.setItem("nr_world",highestWorld);
+}
+
+function beep(freq=500){
+ if(!sound)return;
+ try{
+  audio=audio||new (window.AudioContext||window.webkitAudioContext)();
+  let o=audio.createOscillator(),g=audio.createGain();
+  o.connect(g);g.connect(audio.destination);
+  o.frequency.value=freq;g.gain.value=.06;
+  o.start();o.stop(audio.currentTime+.09);
+ }catch(e){}
+}
+
+function world(){
+ if(score>=1000)return 2;
+ if(score>=450)return 1;
+ return 0;
+}
+
+function worldName(){
+ return ["HIMALAYA 🏔️","GREEN HILLS 🌲","KATHMANDU 🏙️"][world()];
+}
+
+function checkMissions(){
+ let missions=[
+  ["coins100",totalCoins>=100,"जम्मा 100 Coins जम्मा गर","⭐ 1 Trophy"],
+  ["score500",best>=500,"500 Score पुर्‍याऊ","⭐ 1 Trophy"],
+  ["kathmandu",highestWorld>=2,"Kathmandu World पुग","⭐ 2 Trophies"]
+ ];
+ missions.forEach(m=>{
+  if(m[1]&&!done[m[0]]){
+   done[m[0]]=true;
+   trophies+=m[0]==="kathmandu"?2:1;
+   beep(850);
+  }
+ });
+ save();
+ document.getElementById("missionList").innerHTML=missions.map(m=>
+  `<div>${done[m[0]]?"✅":"⬜"} ${m[2]} — ${m[3]}</div>`
+ ).join("");
+ document.getElementById("totalCoins").textContent=totalCoins;
+ document.getElementById("trophies").textContent=trophies;
+ document.getElementById("best").textContent=best;
+}
+
+function updateStatus(){
+ document.getElementById("score").textContent=score;
+ document.getElementById("coins").textContent=coins;
+ document.getElementById("trophies").textContent=trophies;
+}
+
+function startGame(){
+ score=0;coins=0;frame=0;speed=5;
+ objects=[];coinObjects=[];
+ player.y=270;player.vy=0;player.slide=0;
+ mode="play";
+ document.getElementById("menu").hidden=true;
+ document.getElementById("over").hidden=true;
+ document.getElementById("pauseText").hidden=true;
+ updateStatus();
+}
+
+function showMenu(){
+ mode="menu";
+ document.getElementById("menu").hidden=false;
+ document.getElementById("over").hidden=true;
+ document.getElementById("pauseText").hidden=true;
+}
+
+function pauseGame(){
+ if(mode!=="play")return;
+ mode="pause";
+ document.getElementById("pauseText").hidden=false;
+}
+function resumeGame(){
+ if(mode!=="pause")return;
+ mode="play";
+ document.getElementById("pauseText").hidden=true;
+}
+
+function toggleSound(){
+ sound=!sound;
+ document.getElementById("soundBtn").textContent=sound?"🔊 SOUND ON":"🔇 SOUND OFF";
+}
+
+function jump(){
+ if(mode!=="play"||player.y<260)return;
+ player.vy=-14;
+ player.slide=0;
+ beep(650);
+}
+function slide(){
+ if(mode!=="play")return;
+ player.slide=35;
+ beep(300);
+}
+
+let touchY=null;
+canvas.addEventListener("touchstart",e=>{
+ touchY=e.touches[0].clientY;
+},{passive:true});
+canvas.addEventListener("touchend",e=>{
+ if(touchY===null)return;
+ let diff=e.changedTouches[0].clientY-touchY;
+ if(diff < -20)jump();
+ else if(diff > 20)slide();
+ touchY=null;
+},{passive:true});
+
+function endGame(){
+ if(mode!=="play")return;
+ mode="over";
+ best=Math.max(best,score);
+ save();checkMissions();
+ document.getElementById("final").textContent=
+ "Score: "+score+" | Coins: "+coins+" | Best: "+best;
+ document.getElementById("over").hidden=false;
+ beep(130);
+}
+
+function addCoin(){
+ coinObjects.push({x:730,y:210+Math.random()*65});
+}
+
+function update(){
+ if(mode!=="play")return;
+ frame++;
+ if(frame%6===0)score++;
+ speed=5+Math.min(score/500,4);
+
+ player.vy+=.65;
+ player.y+=player.vy;
+ if(player.y>270){player.y=270;player.vy=0}
+ if(player.slide>0)player.slide--;
+
+ if(frame%85===0)objects.push({x:720,type:Math.random()<.5?0:1});
+ if(frame%48===0)addCoin();
+
+ objects.forEach(o=>o.x-=speed);
+ coinObjects.forEach(c=>c.x-=speed);
+ objects=objects.filter(o=>o.x>-80);
+ coinObjects=coinObjects.filter(c=>c.x>-30);
+
+ for(let i=coinObjects.length-1;i>=0;i--){
+  let c=coinObjects[i];
+  if(Math.abs(c.x-(player.x+20))<28&&Math.abs(c.y-(player.y+20))<35){
+   coins++;totalCoins++;
+   coinObjects.splice(i,1);
+   beep(950);checkMissions();
+  }
+ }
+
+ for(let o of objects){
+  let hitX=o.x<player.x+42&&o.x+(o.type===0?30:48)>player.x+5;
+  let hitY=o.type===0?player.y>235:player.slide===0&&player.y<275;
+  if(hitX&&hitY){endGame();return}
+ }
+
+ highestWorld=Math.max(highestWorld,world());
+ best=Math.max(best,score);
+ if(frame%30===0){save();checkMissions()}
+ updateStatus();
+}
+
+function background(){
+ let w=world();
+ let sky=["#80d8ff","#b5e6ff","#f6b978"][w];
+ ctx.fillStyle=sky;ctx.fillRect(0,0,700,400);
+
+ if(w===0){
+  ctx.fillStyle="#eaf7ff";
+  ctx.beginPath();ctx.moveTo(0,280);ctx.lineTo(160,55);ctx.lineTo(310,280);ctx.fill();
+  ctx.beginPath();ctx.moveTo(190,280);ctx.lineTo(410,30);ctx.lineTo(650,280);ctx.fill();
+  ctx.fillStyle="#fff";ctx.beginPath();ctx.moveTo(160,55);ctx.lineTo(125,110);ctx.lineTo(195,110);ctx.fill();
+ }else if(w===1){
+  ctx.fillStyle="#3b9956";
+  ctx.beginPath();ctx.moveTo(0,300);ctx.quadraticCurveTo(180,100,350,300);ctx.quadraticCurveTo(530,130,700,300);ctx.fill();
+ }else{
+  ctx.fillStyle="#52677c";
+  for(let i=0;i<7;i++){
+   ctx.fillRect(i*110+5,150+(i%3)*35,75,175-(i%3)*35);
+   ctx.fillStyle="#ffe08a";
+   for(let j=0;j<3;j++)ctx.fillRect(i*110+20+j*18,170+(i%3)*35,8,12);
+   ctx.fillStyle="#52677c";
+  }
+ }
+ ctx.fillStyle="#3c9b4b";ctx.fillRect(0,325,700,75);
+ ctx.fillStyle="#276d38";ctx.fillRect(0,350,700,50);
+ ctx.fillStyle="white";ctx.font="bold 20px Arial";
+ ctx.fillText(worldName(),18,30);
+}
+
+function drawPlayer(){
+ let x=player.x,y=player.y;
+ ctx.save();
+ if(player.slide>0){
+  ctx.fillStyle="#f2bd82";ctx.fillRect(x+12,y+20,34,18);
+  ctx.fillStyle="#e33";ctx.fillRect(x+4,y+28,42,17);
+ }else{
+  ctx.fillStyle="#f2bd82";
+  ctx.beginPath();ctx.arc(x+22,y+7,13,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle="#111";ctx.fillRect(x+10,y-5,25,7);
+  ctx.fillStyle="#dc3434";ctx.fillRect(x+8,y+20,30,30);
+  ctx.fillStyle="#182d53";ctx.fillRect(x+10,y+48,11,18);
+  ctx.fillRect(x+27,y+48,11,18);
+  ctx.fillStyle="white";ctx.fillRect(x+24,y+4,4,4);
+ }
+ ctx.restore();
+}
+
+function draw(){
+ background();
+ ctx.fillStyle="#fff";ctx.font="bold 18px Arial";
+ ctx.fillText("Score: "+score,550,30);
+
+ coinObjects.forEach(c=>{
+  ctx.fillStyle="#ffd21c";
+  ctx.beginPath();ctx.arc(c.x,c.y,10,0,Math.PI*2);ctx.fill();
+  ctx.fillStyle="#a66b00";ctx.font="bold 12px Arial";ctx.fillText("$",c.x-4,c.y+4);
+ });
+
+ objects.forEach(o=>{
+  if(o.type===0){
+   ctx.fillStyle="#8b4a27";ctx.fillRect(o.x,280,30,45);
+   ctx.fillStyle="#45a83c";ctx.beginPath();ctx.arc(o.x+15,275,19,0,Math.PI*2);ctx.fill();
+  }else{
+   ctx.fillStyle="#713d25";ctx.fillRect(o.x,245,48,13);
+   ctx.fillRect(o.x+4,258,8,15);ctx.fillRect(o.x+36,258,8,15);
+  }
+ });
+ drawPlayer();
+
+ if(mode==="menu"||mode==="pause"){
+  ctx.fillStyle="rgba(0,0,0,.45)";ctx.fillRect(0,0,700,400);
+  ctx.fillStyle="white";ctx.font="bold 34px Arial";
+  ctx.textAlign="center";
+  ctx.fillText(mode==="menu"?"NEPAL RUSH":"PAUSED",350,190);
+  ctx.textAlign="left";
+ }
+}
+
+function loop(){
+ update();
+ draw();
+ requestAnimationFrame(loop);
+}
+checkMissions();
+updateStatus();
+loop();
+</script>
+</body>
+</html>
